@@ -1,0 +1,27 @@
+cube_name: smoke_test
+export_as:
+  format: netcdf
+spatial:
+  target_grid: EEA
+  target_resolution: 1km
+  use_bbox: true
+  bbox:
+    long_min: 3.376891
+    long_max: 4.804775
+    lat_min: 50.583876
+    lat_max: 51.386124
+temporal:
+  start_year: 2018
+  start_month: 1
+  end_year: 2018
+  end_month: 1
+sources:
+  chelsa:
+    enabled: true
+    levels:
+      monthly:
+        include: true
+        variables:
+          tas: true
+  gbif:
+    enabled: false
