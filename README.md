@@ -42,7 +42,7 @@ Everything after the service name is passed to `create_cube.py`. Cubes appear in
 `output/`. The CHELSA data is read over HTTPS from `os.unil.cloud.switch.ch`, so
 the container needs internet access.
 
-### Which BmC version is in the image
+### BmC Version
 
 The `BMC_REF` argument at the top of the `Dockerfile` is the BmC commit that is
 built into the image (also recorded in the image label `bmc.commit`). To ship a

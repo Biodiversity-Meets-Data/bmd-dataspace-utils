@@ -16,8 +16,8 @@ Credentials are read from the environment and never prompted for:
     GBIF_USER, GBIF_MAIL, GBIF_PWD    GBIF source, unless it uses local_file_path
     HDA_USER, HDA_PASSWORD            WEkEO source
 
-Exit status: 0 on success, 1 if cube generation failed, 2 if the invocation,
-recipe or credentials are invalid.
+Exit status: 0 on success, 1 if cube generation failed or wrote no output for
+an enabled source, 2 if the invocation, recipe or credentials are invalid.
 """
 import argparse
 import faulthandler
@@ -31,6 +31,7 @@ import yaml
 EXIT_FAILED = 1
 EXIT_INVALID = 2
 
+CHECKED_SOURCES = ("chelsa", "gbif")
 GBIF_VARS = ("GBIF_USER", "GBIF_MAIL", "GBIF_PWD")
 WEKEO_VARS = ("HDA_USER", "HDA_PASSWORD")
 
@@ -49,7 +50,7 @@ def parse_args(argv):
         "--output-dir",
         default=os.environ.get("BMC_OUTPUT_DIR"),
         help="replaces base_dir from the recipe; the cube is written to "
-             "<output-dir>/<cube_name>",
+        "<output-dir>/<cube_name>",
     )
     parser.add_argument(
         "--catalog",
@@ -112,7 +113,7 @@ def read_credentials(recipe):
     missing = []
 
     if source_enabled(recipe, "gbif") and not recipe["sources"]["gbif"].get(
-            "local_file_path"
+        "local_file_path"
     ):
         missing += [v for v in GBIF_VARS if not os.environ.get(v)]
         creds = {v: os.environ.get(v) for v in GBIF_VARS}
@@ -124,6 +125,25 @@ def read_credentials(recipe):
     if missing:
         raise InvalidInput("missing environment variables: " + ", ".join(missing))
     return creds
+
+
+def missing_outputs(recipe, cube_dir):
+    """Enabled sources for which the engine wrote no files.
+
+    The engine puts the output of each source in <cube_dir>/<source>. It can
+    finish without error and still have written nothing, for example when it
+    fails to find the code for a source.
+    """
+    sources = recipe.get("sources") or {}
+    missing = []
+    for name in CHECKED_SOURCES:
+        cfg = sources.get(name)
+        if cfg is None or not cfg.get("enabled", name == "gbif"):
+            continue
+        path = os.path.join(cube_dir, name)
+        if not any(files for _, _, files in os.walk(path)):
+            missing.append(name)
+    return missing
 
 
 def main(argv=None):
@@ -168,6 +188,10 @@ def main(argv=None):
             return EXIT_FAILED
 
     cube_dir = os.path.join(recipe["base_dir"], recipe.get("cube_name", "default_cube"))
+    missing = missing_outputs(recipe, cube_dir)
+    if missing:
+        logger.error("no output written for: %s", ", ".join(missing))
+        return EXIT_FAILED
     logger.info("cube written to %s", cube_dir)
     return 0
 

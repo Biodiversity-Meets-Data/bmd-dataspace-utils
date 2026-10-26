@@ -1,5 +1,5 @@
 # BmC (the cubing engine) commit that goes into the image. To ship a newer
-# engine, change this value and nothing else.
+# engine, change this value.
 ARG BMC_REF=229600ea973a721c620a78799ed8ba8680a79caf
 
 FROM scratch AS bmc
