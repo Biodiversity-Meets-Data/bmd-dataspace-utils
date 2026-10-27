@@ -130,18 +130,24 @@ def read_credentials(recipe):
 def missing_outputs(recipe, cube_dir):
     """Enabled sources for which the engine wrote no files.
 
-    The engine puts the output of each source in <cube_dir>/<source>. It can
-    finish without error and still have written nothing, for example when it
-    fails to find the code for a source.
+    The engine writes the output of a source to a folder in cube_dir named
+    after the dataset: 'chelsacube' for CHELSA, 'gbif' for GBIF. The engine
+    can finish without error and still have written nothing, for example when
+    it fails to find the code for a source. Folders are matched by prefix, as
+    the exact names are up to the engine.
     """
     sources = recipe.get("sources") or {}
+    try:
+        folders = os.listdir(cube_dir)
+    except FileNotFoundError:
+        folders = []
     missing = []
     for name in CHECKED_SOURCES:
         cfg = sources.get(name)
         if cfg is None or not cfg.get("enabled", name == "gbif"):
             continue
-        path = os.path.join(cube_dir, name)
-        if not any(files for _, _, files in os.walk(path)):
+        paths = [os.path.join(cube_dir, d) for d in folders if d.startswith(name)]
+        if not any(files for p in paths for _, _, files in os.walk(p)):
             missing.append(name)
     return missing
 
