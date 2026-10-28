@@ -1,10 +1,10 @@
 # BmC (the cubing engine) commit that goes into the image. To ship a newer
-# engine, change this value.
+# engine, change this value and nothing else.
 ARG BMC_REF=229600ea973a721c620a78799ed8ba8680a79caf
 
 FROM scratch AS bmc
 ARG BMC_REF
-ADD https://github.com/Biodiversity-Meets-Data/BmC.git#${BMC_REF} /
+ADD "https://github.com/Biodiversity-Meets-Data/BmC.git#${BMC_REF}" "/"
 
 
 FROM mambaorg/micromamba:2.9.0-debian12-slim
@@ -34,12 +34,12 @@ RUN pip install --no-deps /tmp/bmc && rm -rf /tmp/bmc
 COPY --from=bmc --chown=$MAMBA_USER:$MAMBA_USER /meta/chelsa_gp_stac /app/meta/chelsa_gp_stac
 COPY --chown=$MAMBA_USER:$MAMBA_USER create_cube.py /app/create_cube.py
 
-ENV PYTHONUNBUFFERED=1 \
-    BMC_OUTPUT_DIR=/output \
-    BMC_CHELSA_CATALOG=/app/meta/chelsa_gp_stac/chelsa_master.parquet
+ENV PYTHONUNBUFFERED=1
 
 VOLUME /output
 
 # The base image's entrypoint script activates the conda environment first.
-ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "python", "/app/create_cube.py"]
-CMD ["--help"]
+ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "python", "/app/create_cube.py", \
+           "--output-dir", "/output", \
+           "--chelsa-catalog", "/app/meta/chelsa_gp_stac/chelsa_master.parquet", \
+           "/recipe.yaml"]

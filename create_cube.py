@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 """Generate a data cube from a recipe file.
 
-    create_cube.py RECIPE [--output-dir DIR] [--catalog FILE] [--max-workers N]
+    create_cube.py RECIPE --output-dir DIR [--chelsa-catalog FILE] [--max-workers N]
 
 The recipe is a YAML file in the BmC recipe format (see config/template_recipe.yaml
-in the BmC repository). Paths
-that depend on the machine the engine runs on (the output directory and the
-CHELSA catalog) can be overridden here, so the same recipe works on a laptop,
-in a container and on a cluster.
+in the BmC repository).
 
-Precedence for both: command line option, then environment variable
-(BMC_OUTPUT_DIR, BMC_CHELSA_CATALOG), then the value in the recipe.
+The recipe does not decide where the cube is written. --output-dir replaces any
+base_dir or paths.base_dir in the recipe, and the cube ends up in
+DIR/<cube_name>. For that reason cube_name (and dataset_name, if present) must be
+a plain name, not a path. The Docker image passes --output-dir /output itself.
+
+--chelsa-catalog replaces sources.chelsa.catalog_path from the recipe. The Docker
+image passes its own copy of the catalog.
 
 Credentials are read from the environment and never prompted for:
     GBIF_USER, GBIF_MAIL, GBIF_PWD    GBIF source, unless it uses local_file_path
@@ -23,6 +25,7 @@ import argparse
 import faulthandler
 import logging
 import os
+import re
 import sys
 import tempfile
 
@@ -30,6 +33,8 @@ import yaml
 
 EXIT_FAILED = 1
 EXIT_INVALID = 2
+
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 CHECKED_SOURCES = ("chelsa", "gbif")
 GBIF_VARS = ("GBIF_USER", "GBIF_MAIL", "GBIF_PWD")
@@ -48,13 +53,11 @@ def parse_args(argv):
     parser.add_argument("recipe", help="path to the YAML recipe")
     parser.add_argument(
         "--output-dir",
-        default=os.environ.get("BMC_OUTPUT_DIR"),
-        help="replaces base_dir from the recipe; the cube is written to "
-        "<output-dir>/<cube_name>",
+        required=True,
+        help="directory in which the cube is written; replaces base_dir from the recipe",
     )
     parser.add_argument(
-        "--catalog",
-        default=os.environ.get("BMC_CHELSA_CATALOG"),
+        "--chelsa-catalog",
         help="replaces sources.chelsa.catalog_path from the recipe",
     )
     parser.add_argument(
@@ -79,15 +82,39 @@ def load_recipe(path):
     return recipe
 
 
-def apply_overrides(recipe, output_dir, catalog):
-    if output_dir:
-        recipe["base_dir"] = output_dir
-    if not recipe.get("base_dir"):
+def check_plain_name(recipe, key, required):
+    """The engine joins these names to the output directory, so they must not
+    be able to point anywhere else (an absolute path or '..' would)."""
+    if key not in recipe and not required:
+        return
+    value = recipe.get(key)
+    if value is None:
+        raise InvalidInput(f"recipe has no '{key}'")
+    if not isinstance(value, str) or not PLAIN_NAME.fullmatch(value):
         raise InvalidInput(
-            "no output location: set base_dir in the recipe or pass --output-dir"
+            f"'{key}' must be a plain name (letters, digits, '.', '_' and '-'), "
+            f"got {value!r}"
         )
+
+
+def apply_overrides(recipe, output_dir, catalog):
+    if not output_dir:
+        raise InvalidInput("--output-dir must not be empty")
     if "spatial" not in recipe:
         raise InvalidInput("recipe has no 'spatial' section")
+    check_plain_name(recipe, "cube_name", required=True)
+    check_plain_name(recipe, "dataset_name", required=False)
+
+    # The engine prefers paths.base_dir over base_dir, so replace both.
+    log = logging.getLogger("create_cube")
+    if recipe.get("base_dir") not in (None, output_dir):
+        log.warning("ignoring base_dir %r from the recipe", recipe["base_dir"])
+    recipe["base_dir"] = output_dir
+    paths = recipe.get("paths")
+    if isinstance(paths, dict) and "base_dir" in paths:
+        if paths["base_dir"] != output_dir:
+            log.warning("ignoring paths.base_dir %r from the recipe", paths["base_dir"])
+        paths["base_dir"] = output_dir
 
     chelsa = (recipe.get("sources") or {}).get("chelsa")
     if catalog and chelsa is not None:
@@ -164,7 +191,7 @@ def main(argv=None):
 
     try:
         recipe = load_recipe(args.recipe)
-        apply_overrides(recipe, args.output_dir, args.catalog)
+        apply_overrides(recipe, args.output_dir, args.chelsa_catalog)
         creds = read_credentials(recipe)
     except InvalidInput as e:
         logger.error("%s", e)
@@ -193,7 +220,7 @@ def main(argv=None):
             logger.exception("cube generation failed")
             return EXIT_FAILED
 
-    cube_dir = os.path.join(recipe["base_dir"], recipe.get("cube_name", "default_cube"))
+    cube_dir = os.path.join(recipe["base_dir"], recipe["cube_name"])
     missing = missing_outputs(recipe, cube_dir)
     if missing:
         logger.error("no output written for: %s", ", ".join(missing))

@@ -1,10 +1,9 @@
 services:
   cube:
-    image: ${CUBE_IMAGE:-ghcr.io/biodiversity-meets-data/bmd-dataspace-utils:main}
+    image: "ghcr.io/biodiversity-meets-data/bmd-dataspace-utils:${IMAGE_VERSION:-main}"
     build: .
     env_file:
       - path: .env
         required: false
     volumes:
-      - ./recipes:/recipes:ro
-      - ./output:/output
+      - "${CUBE_OUTPUT_DIR:?}:/output"

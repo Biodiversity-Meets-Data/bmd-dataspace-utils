@@ -17,16 +17,17 @@ sources:
   gbif: {enabled: false}
 """
 
-CREDENTIAL_VARS = [
+ARGS = ["recipe.yaml", "--output-dir", "/output"]
+
+ENVIRONMENT_VARS = [
     "GBIF_USER", "GBIF_MAIL", "GBIF_PWD",
     "HDA_USER", "HDA_PASSWORD",
-    "BMC_OUTPUT_DIR", "BMC_CHELSA_CATALOG",
 ]
 
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    for name in CREDENTIAL_VARS:
+    for name in ENVIRONMENT_VARS:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -35,6 +36,11 @@ def catalog(tmp_path):
     path = tmp_path / "catalog.parquet"
     path.touch()
     return path
+
+
+@pytest.fixture
+def output_dir(tmp_path):
+    return tmp_path / "out"
 
 
 def write_recipe(tmp_path, text=RECIPE):
@@ -47,7 +53,7 @@ def recipe_dict(text=RECIPE):
     return yaml.safe_load(text)
 
 
-class MockEngine:
+class FakeEngine:
     """Stands in for bmc.cube.orchestrator.bmd.bmdCube."""
 
     def __init__(self):
@@ -59,20 +65,20 @@ class MockEngine:
 
 @pytest.fixture
 def engine(monkeypatch):
-    mock_engine = MockEngine()
+    fake = FakeEngine()
 
     class bmdCube:
         def process_recipe(self, recipe_file, recipe_path, max_workers, logger, creds):
             with open(recipe_file, encoding="utf-8") as f:
                 recipe = yaml.safe_load(f)
-            mock_engine.recipes.append(recipe)
-            mock_engine.calls.append(
+            fake.recipes.append(recipe)
+            fake.calls.append(
                 {"recipe_file": recipe_file, "max_workers": max_workers, "creds": creds}
             )
-            if mock_engine.error:
-                raise mock_engine.error
+            if fake.error:
+                raise fake.error
             cube_dir = Path(recipe["base_dir"]) / recipe["cube_name"]
-            for relative in mock_engine.writes:
+            for relative in fake.writes:
                 target = cube_dir / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("x")
@@ -81,34 +87,26 @@ def engine(monkeypatch):
     for name in names:
         monkeypatch.setitem(sys.modules, name, ModuleType(name))
     sys.modules["bmc.cube.orchestrator.bmd"].bmdCube = bmdCube
-    return mock_engine
+    return fake
 
 
 def run(tmp_path, catalog, *extra, recipe=RECIPE):
     path = write_recipe(tmp_path, recipe)
-    argv = [str(path), "--output-dir", str(tmp_path / "out"), "--catalog", str(catalog)]
+    argv = [str(path), "--output-dir", str(tmp_path / "out"), "--chelsa-catalog", str(catalog)]
     return create_cube.main(argv + list(extra))
 
 
 class TestParseArgs:
     def test_defaults(self):
-        args = create_cube.parse_args(["recipe.yaml"])
+        args = create_cube.parse_args(["recipe.yaml", "--output-dir", "/output"])
         assert args.recipe == "recipe.yaml"
-        assert args.output_dir is None
-        assert args.catalog is None
+        assert args.output_dir == "/output"
+        assert args.chelsa_catalog is None
         assert args.max_workers == 4
 
-    def test_environment_supplies_defaults(self, monkeypatch):
-        monkeypatch.setenv("BMC_OUTPUT_DIR", "/output")
-        monkeypatch.setenv("BMC_CHELSA_CATALOG", "/app/catalog.parquet")
-        args = create_cube.parse_args(["recipe.yaml"])
-        assert args.output_dir == "/output"
-        assert args.catalog == "/app/catalog.parquet"
-
-    def test_option_beats_environment(self, monkeypatch):
-        monkeypatch.setenv("BMC_OUTPUT_DIR", "/output")
-        args = create_cube.parse_args(["recipe.yaml", "--output-dir", "/elsewhere"])
-        assert args.output_dir == "/elsewhere"
+    def test_catalog_option(self):
+        args = create_cube.parse_args(ARGS + ["--chelsa-catalog", "/elsewhere"])
+        assert args.chelsa_catalog == "/elsewhere"
 
 
 class TestLoadRecipe:
@@ -132,47 +130,105 @@ class TestLoadRecipe:
             create_cube.load_recipe(path)
 
 
-class TestApplyOverrides:
-    def test_output_dir_replaces_base_dir(self, catalog):
-        recipe = recipe_dict("base_dir: /from/recipe\n" + RECIPE)
-        create_cube.apply_overrides(recipe, "/from/option", str(catalog))
-        assert recipe["base_dir"] == "/from/option"
+class TestOutputLocation:
+    def test_base_dir_is_set_from_the_output_dir(self, catalog):
+        recipe = recipe_dict()
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+        assert recipe["base_dir"] == "/output"
 
-    def test_base_dir_from_recipe_is_kept(self, catalog):
-        recipe = recipe_dict("base_dir: /from/recipe\n" + RECIPE)
-        create_cube.apply_overrides(recipe, None, str(catalog))
-        assert recipe["base_dir"] == "/from/recipe"
+    def test_the_recipe_cannot_choose_the_output_dir(self, catalog, caplog):
+        recipe = recipe_dict("base_dir: /somewhere/else\n" + RECIPE)
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+        assert recipe["base_dir"] == "/output"
+        assert "ignoring base_dir '/somewhere/else'" in caplog.text
 
-    def test_no_output_location(self, catalog):
-        with pytest.raises(InvalidInput, match="no output location"):
-            create_cube.apply_overrides(recipe_dict(), None, str(catalog))
+    def test_paths_base_dir_is_replaced_too(self, catalog, caplog):
+        recipe = recipe_dict("paths: {base_dir: /somewhere/else, raw_dir: /raw}\n" + RECIPE)
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+        assert recipe["paths"]["base_dir"] == "/output"
+        assert recipe["paths"]["raw_dir"] == "/raw"
+        assert "ignoring paths.base_dir" in caplog.text
 
-    def test_spatial_section_is_required(self, catalog):
-        recipe = recipe_dict("cube_name: demo\n")
-        with pytest.raises(InvalidInput, match="no 'spatial' section"):
-            create_cube.apply_overrides(recipe, "/out", str(catalog))
+    def test_paths_section_is_not_added_when_absent(self, catalog):
+        recipe = recipe_dict()
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+        assert "paths" not in recipe
 
+    def test_no_warning_when_the_recipe_agrees(self, catalog, caplog):
+        recipe = recipe_dict("base_dir: /output\n" + RECIPE)
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+        assert caplog.text == ""
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_output_dir_must_not_be_empty(self, catalog, value):
+        with pytest.raises(InvalidInput, match="--output-dir"):
+            create_cube.apply_overrides(recipe_dict(), value, str(catalog))
+
+
+class TestNames:
+    @pytest.mark.parametrize("name", ["demo", "europe_chelsa_10km.v2", "a-b", "'2018'"])
+    def test_plain_names_are_accepted(self, catalog, name):
+        recipe = recipe_dict(RECIPE.replace("demo", name))
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
+
+    def test_unquoted_number_is_rejected(self, catalog):
+        # YAML reads an unquoted 2018 as an integer, which the engine cannot join to a path
+        recipe = recipe_dict(RECIPE.replace("demo", "2018"))
+        with pytest.raises(InvalidInput, match="cube_name"):
+            create_cube.apply_overrides(recipe, "/output", str(catalog))
+
+    @pytest.mark.parametrize(
+        "name", ["../escape", "/etc/passwd", "a/b", "..", ".", "", " demo", "a\\b"]
+    )
+    @pytest.mark.parametrize("key", ["cube_name", "dataset_name"])
+    def test_names_that_are_paths_are_rejected(self, catalog, key, name):
+        recipe = recipe_dict(RECIPE)
+        recipe[key] = name
+        with pytest.raises(InvalidInput, match=key):
+            create_cube.apply_overrides(recipe, "/output", str(catalog))
+
+    def test_cube_name_is_required(self, catalog):
+        recipe = recipe_dict("spatial: {}\n")
+        with pytest.raises(InvalidInput, match="no 'cube_name'"):
+            create_cube.apply_overrides(recipe, "/output", str(catalog))
+
+    def test_dataset_name_is_optional(self, catalog):
+        create_cube.apply_overrides(recipe_dict(), "/output", str(catalog))
+
+    def test_names_must_be_strings(self, catalog):
+        recipe = recipe_dict(RECIPE)
+        recipe["cube_name"] = ["demo"]
+        with pytest.raises(InvalidInput, match="cube_name"):
+            create_cube.apply_overrides(recipe, "/output", str(catalog))
+
+
+class TestCatalog:
     def test_catalog_replaces_catalog_path(self, catalog):
         recipe = recipe_dict(
             "cube_name: demo\nspatial: {}\n"
             "sources: {chelsa: {enabled: true, catalog_path: 'C:/elsewhere.parquet'}}\n"
         )
-        create_cube.apply_overrides(recipe, "/out", str(catalog))
+        create_cube.apply_overrides(recipe, "/output", str(catalog))
         assert recipe["sources"]["chelsa"]["catalog_path"] == str(catalog)
 
     def test_missing_catalog_file(self, tmp_path):
         with pytest.raises(InvalidInput, match="CHELSA catalog not found"):
-            create_cube.apply_overrides(recipe_dict(), "/out", str(tmp_path / "nope"))
+            create_cube.apply_overrides(recipe_dict(), "/output", str(tmp_path / "nope"))
 
     def test_no_catalog_at_all(self):
         with pytest.raises(InvalidInput, match="CHELSA catalog not found: None"):
-            create_cube.apply_overrides(recipe_dict(), "/out", None)
+            create_cube.apply_overrides(recipe_dict(), "/output", None)
 
     def test_catalog_is_not_needed_without_chelsa(self):
         recipe = recipe_dict(
             "cube_name: demo\nspatial: {}\nsources: {chelsa: {enabled: false}}\n"
         )
-        create_cube.apply_overrides(recipe, "/out", None)
+        create_cube.apply_overrides(recipe, "/output", None)
+
+    def test_spatial_section_is_required(self, catalog):
+        recipe = recipe_dict("cube_name: demo\n")
+        with pytest.raises(InvalidInput, match="no 'spatial' section"):
+            create_cube.apply_overrides(recipe, "/output", str(catalog))
 
 
 class TestReadCredentials:
@@ -252,26 +308,34 @@ class TestMissingOutputs:
 
 
 class TestMain:
-    def test_success(self, tmp_path, catalog, engine, caplog):
+    def test_success(self, tmp_path, catalog, output_dir, engine, caplog):
         caplog.set_level(logging.INFO)
         engine.writes = ["chelsacube/monthly/tas.nc"]
         assert run(tmp_path, catalog) == 0
         assert "cube written to" in caplog.text
 
-    def test_engine_gets_the_effective_recipe(self, tmp_path, catalog, engine):
+    def test_engine_gets_the_effective_recipe(self, tmp_path, catalog, output_dir, engine):
         engine.writes = ["chelsacube/monthly/tas.nc"]
         run(tmp_path, catalog)
         sent = engine.recipes[0]
-        assert sent["base_dir"] == str(tmp_path / "out")
+        assert sent["base_dir"] == str(output_dir)
         assert sent["sources"]["chelsa"]["catalog_path"] == str(catalog)
         assert Path(engine.calls[0]["recipe_file"]).is_absolute()
 
-    def test_max_workers_is_passed_on(self, tmp_path, catalog, engine):
+    def test_cube_lands_in_the_configured_directory(self, tmp_path, catalog, output_dir, engine):
+        engine.writes = ["chelsacube/monthly/tas.nc"]
+        recipe = "base_dir: /somewhere/else\npaths: {base_dir: /and/here}\n" + RECIPE
+        assert run(tmp_path, catalog, recipe=recipe) == 0
+        assert (output_dir / "demo" / "chelsacube" / "monthly" / "tas.nc").is_file()
+
+    def test_max_workers_is_passed_on(self, tmp_path, catalog, output_dir, engine):
         engine.writes = ["chelsacube/monthly/tas.nc"]
         run(tmp_path, catalog, "--max-workers", "2")
         assert engine.calls[0]["max_workers"] == 2
 
-    def test_gbif_credentials_are_passed_on(self, tmp_path, catalog, engine, monkeypatch):
+    def test_gbif_credentials_are_passed_on(
+        self, tmp_path, catalog, output_dir, engine, monkeypatch
+    ):
         for name in ("GBIF_USER", "GBIF_MAIL", "GBIF_PWD"):
             monkeypatch.setenv(name, name.lower())
         engine.writes = ["chelsacube/monthly/tas.nc", "gbif/occurrences.parquet"]
@@ -281,26 +345,39 @@ class TestMain:
             "GBIF_USER": "gbif_user", "GBIF_MAIL": "gbif_mail", "GBIF_PWD": "gbif_pwd",
         }
 
-    def test_engine_failure(self, tmp_path, catalog, engine, caplog):
+    def test_engine_failure(self, tmp_path, catalog, output_dir, engine, caplog):
         engine.error = RuntimeError("boom")
         assert run(tmp_path, catalog) == 1
         assert "cube generation failed" in caplog.text
         assert "boom" in caplog.text
 
-    def test_silent_failure_of_the_engine(self, tmp_path, catalog, engine, caplog):
+    def test_silent_failure_of_the_engine(self, tmp_path, catalog, output_dir, engine, caplog):
         assert run(tmp_path, catalog) == 1
         assert "no output written for: chelsa" in caplog.text
 
-    def test_invalid_recipe_does_not_reach_the_engine(self, tmp_path, catalog, engine):
+    def test_empty_output_dir(self, tmp_path, catalog, engine, caplog):
+        path = write_recipe(tmp_path)
+        assert create_cube.main([str(path), "--output-dir", "", "--chelsa-catalog", str(catalog)]) == 2
+        assert "--output-dir" in caplog.text
+        assert engine.calls == []
+
+    def test_cube_name_that_escapes_the_output_dir(self, tmp_path, catalog, output_dir, engine):
+        assert run(tmp_path, catalog, recipe=RECIPE.replace("demo", "/tmp/evil")) == 2
+        assert engine.calls == []
+
+    def test_invalid_recipe_does_not_reach_the_engine(self, tmp_path, catalog, output_dir, engine):
         assert run(tmp_path, catalog, recipe="- not a mapping\n") == 2
         assert engine.calls == []
 
-    def test_missing_credentials_do_not_reach_the_engine(self, tmp_path, catalog, engine, caplog):
+    def test_missing_credentials_do_not_reach_the_engine(
+        self, tmp_path, catalog, output_dir, engine, caplog
+    ):
         recipe = RECIPE.replace("{enabled: false}", "{enabled: true}")
         assert run(tmp_path, catalog, recipe=recipe) == 2
         assert "GBIF_USER" in caplog.text
         assert engine.calls == []
 
-    def test_recipe_file_does_not_exist(self, tmp_path, catalog, engine):
-        argv = [str(tmp_path / "nope.yaml"), "--output-dir", str(tmp_path), "--catalog", str(catalog)]
+    def test_recipe_file_does_not_exist(self, tmp_path, catalog, output_dir, engine):
+        argv = [str(tmp_path / "nope.yaml"), "--output-dir", str(output_dir),
+                "--chelsa-catalog", str(catalog)]
         assert create_cube.main(argv) == 2

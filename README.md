@@ -1,58 +1,58 @@
 # bmd-dataspace-utils
 
-Python scripts and programs that run on the BMD dataspace (WP4). For now, that is just one thing: running the Cubing
-Engine.
+Python scripts and programs that run on the BMD Dataspace. The scripts and programs are wrapped in a Docker image. They
+are not meant to run directly on the server but via a `docker compose run` call.
 
-## Docker Image
+Currently, there is just one script inside the Docker image: `create_cube.py`. Therefore, conveniently for now, that is
+also the ENTRYPOINT of the Docker image. `create_cube.py` calls
+the [Cubing Engine](https://github.com/biodiversity-meets-data/bmC) to create a data cube (see below).
 
-`create_cube.py` is the entrypoint of the image.
+## Building the Docker Image
 
-```
-create_cube.py RECIPE [--output-dir DIR] [--catalog FILE] [--max-workers N]
-```
+### From the Command Line
 
-| Option         | Environment variable | Replaces in the recipe        |
-|----------------|----------------------|-------------------------------|
-| `--output-dir` | `BMC_OUTPUT_DIR`     | `base_dir`                    |
-| `--catalog`    | `BMC_CHELSA_CATALOG` | `sources.chelsa.catalog_path` |
-
-The image sets both variables, so recipes need not contain machine-specific
-paths. The cube ends up in `<output dir>/<cube_name>`.
-
-Credentials are read from environment variables and are never prompted for:
-
-| Source                                 | Variables                            |
-|----------------------------------------|--------------------------------------|
-| GBIF (unless `local_file_path` is set) | `GBIF_USER`, `GBIF_MAIL`, `GBIF_PWD` |
-| WEkEO                                  | `HDA_USER`, `HDA_PASSWORD`           |
-
-Exit status: `0` success, `1` cube generation failed, `2` invalid arguments,
-recipe or credentials.
-
-### Running
-
-Put credentials in a `.env` file next to `docker-compose.yml` (it is ignored by
-git), recipes in `recipes/`, and run:
+To build the Docker image from the command line, simply run:
 
 ```
-docker compose run --rm cube /recipes/smoke_test.yaml
+docker build -t bmd-dataspace-utils .
 ```
 
-Everything after the service name is passed to `create_cube.py`. Cubes appear in
-`output/`. The CHELSA data is read over HTTPS from `os.unil.cloud.switch.ch`, so
-the container needs internet access.
+### In GitHub (GitHub Actions)
 
-### BmC Version
+Every pull request triggers a build pipeline that runs the unit tests, builds the image and runs
+a [smoke test](tests/smoke_test.sh). However, the image only gets _published_ to GitHub's container registry if you
+merge or push to `main`, or if you push a git tag starting with `v`. To see the list of published images, go to
+https://github.com/Biodiversity-Meets-Data/bmd-dataspace-utils/pkgs/container/bmd-dataspace-utils.
 
-The `BMC_REF` argument at the top of the `Dockerfile` is the BmC commit that is
-built into the image (also recorded in the image label `bmc.commit`). To ship a
-newer engine, change that value. To try another commit or branch of BmC without
-editing anything:
+The build pipeline is specified in [.github/workflows/docker.yml](.github/workflows/docker.yml).
+
+## Cubing Engine Version
+
+The `BMC_REF` argument at the top of the [Dockerfile](Dockerfile) specifies which version (commit/tag/branch) of the
+Cubing Engine to include in the image. To try out another commit or branch of
+the [BmC repository](https://github.com/biodiversity-meets-data/bmC) without editing the `Dockerfile`, run
 
 ```
 docker build --build-arg BMC_REF=<commit, tag or branch> -t bmd-dataspace-utils:dev .
 ```
 
-The pipeline (`.github/workflows/docker.yml`) builds on every pull request and
-publishes to `ghcr.io/biodiversity-meets-data/bmd-dataspace-utils` on pushes to
-`main` and on `v*` tags.
+## GitHub Actions
+
+## Creating a Cube
+
+To create a data cube using the Docker image, first copy [env.template](env.template) to `.env`. Set CUBE_OUTPUT_DIR in
+`.env` to the directory where you want the cube to be created. Set the other variables as and when needed. Then run:
+
+```
+docker compose run --rm --user "$(id -u):$(id -g)" -v "/full/path/to/my-recipe.yml:/recipe.yaml:ro" cube
+```
+
+A few things to note here:
+
+- This will run the `python` executable inside the Docker container as "you" (`--user "$(id -u):$(id -g)"`). This is
+  necessary to give the Cubing Engine write access to CUBE_OUTPUT_DIR.
+- The recipe file (`my-recipe.yml`) may live anywhere on your filesystem, but be sure to specify its full path
+  (starting with `/`), not a relative path.
+- Your recipe file must always be mapped into the container as `/recipe.yaml` (using the `-v` option, as shown above).
+
+A concrete (but useless) example can be found in [smoke_test.sh](tests/smoke_test.sh).
