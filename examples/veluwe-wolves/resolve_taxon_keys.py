@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Resolve species names to GBIF backbone usageKeys for the recipe's taxon_keys list.
-
-Run on a machine with internet access (the dataspace container's sandbox blocks
-api.gbif.org). Prints a taxon_keys line you can paste into the recipe, and warns
-on anything GBIF matched fuzzily or flagged as a synonym.
+"""
+Utility scripts. Looks up GBIF usage keys for the wolf and ir prey.
+Outputs a line with keys, to be pasted into the recipe. (Has already been done.)
 """
 
 import sys
