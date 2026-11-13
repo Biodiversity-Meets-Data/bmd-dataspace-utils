@@ -49,12 +49,7 @@ sources:
     local_file_path:
 
     query_filters:
-      # Canis lupus (wolf), Cervus elaphus (red deer), Sus scrofa (wild boar),
-      # Capreolus capreolus (roe deer).
-      # These are GBIF backbone usageKeys (col_backbone is false below).
-      # RESOLVE/VERIFY THESE FIRST with resolve_taxon_keys.py - a wrong key makes
-      # that species silently absent from the cube, with no error raised.
-      taxon_keys: [5219173, 2440958, 7705930, 5220126]
+      taxon_keys: ["T56G", "QLXL", "53HGR", "QSF3"]
 
       fetch_all_taxa: false
       record_type: "presence"
@@ -73,9 +68,10 @@ sources:
         - "COUNTRY_COORDINATE_MISMATCH"
 
     taxonomy:
-      # false -> treat taxon_keys as GBIF integer usageKeys (what resolve_taxon_keys.py
-      # produces). Set true only if you switch to Catalogue of Life string keys.
-      col_backbone: false
+      # GBIF's backbone is now the Catalogue of Life Extended Release, so taxon_keys
+      # are the alphanumeric CoL keys (resolve them with utilities/check_keys.py) and
+      # col_backbone must be true. The legacy integer keys return zero occurrences.
+      col_backbone: true
       lowest_level:
 
     # Keep speciesKey (always fetched) plus year. No month: this is a yearly cube.
@@ -108,16 +104,11 @@ sources:
 
       metrics:
         # Expected occurrences: sum of the fractional mass each record contributes
-        # to a cell. The main quantity to compare predator against prey.
-        - column: "areal_fraction"
+        # to a cell. In point_cloud mode the per-record weight column is "fraction"
+        # (the polygon mapper calls it "areal_fraction" - a different name; using the
+        # wrong one makes the engine silently skip the metric and the measure goes
+        # missing). The main quantity to compare predator against prey.
+        - column: "fraction"
           method: "sum"
           weighted: false
           rename: "expected_occurrences"
-
-        # Distinct observers per cell/year/species - a rough recording-effort
-        # control, so a "hot" cell for prey isn't just a well-watched trail.
-        - column: "recordedBy"
-          method: "nunique"
-          weighted: false
-          rename: "distinct_observers"
-

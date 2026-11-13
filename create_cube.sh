@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
 # USAGE: create_cube.sh </full/path/to/some_recipe.yml>
-# (Recipes inside this repository can be specified through
-# a relative path.)
+# Recipes _inside_ this repository can be specified through a relative path.
 
 BASE_DIR="$(dirname "${0}")"
 BASE_DIR="$(realpath "$BASE_DIR")"

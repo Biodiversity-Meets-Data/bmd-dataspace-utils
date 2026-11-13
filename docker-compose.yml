@@ -1,7 +1,11 @@
 services:
   cube:
     image: "ghcr.io/biodiversity-meets-data/bmd-dataspace-utils:${IMAGE_VERSION:-main}"
-    build: .
+    # TEMPORARY: while building locally, the image is built by hand with a
+    # --build-context (see the Dockerfile header), so compose must not try to
+    # build it itself from this directory alone. Un-comment to restore the
+    # normal GitHub-based build.
+    # build: .
     env_file:
       - path: .env
         required: false

@@ -2,9 +2,21 @@
 # engine, change this value and nothing else.
 ARG BMC_REF=229600ea973a721c620a78799ed8ba8680a79caf
 
-FROM scratch AS bmc
-ARG BMC_REF
-ADD "https://github.com/Biodiversity-Meets-Data/BmC.git#${BMC_REF}" "/"
+# --- TEMPORARY: building from a local BmC checkout ---------------------------
+# While upstream BmC is unstable, the engine is NOT pulled from GitHub. Instead
+# the `bmc` build context below is supplied from a local checkout at build time:
+#
+#   docker build \
+#     --build-context bmc=/home/ayco/git-repos/bmd-github/BmC \
+#     -t ghcr.io/biodiversity-meets-data/bmd-dataspace-utils:local .
+#
+# That checkout is expected to be on 229600ea with the map_taxonkeys_to_columns
+# argument-order fix applied. To go back to pulling from GitHub, un-comment the
+# two lines below and drop the --build-context flag.
+#
+# FROM scratch AS bmc
+# ADD "https://github.com/Biodiversity-Meets-Data/BmC.git#${BMC_REF}" "/"
+# -----------------------------------------------------------------------------
 
 
 FROM mambaorg/micromamba:2.9.0-debian12-slim
@@ -27,7 +39,7 @@ WORKDIR /app
 # The engine. Its dependencies are in environment.yml, hence --no-deps.
 # Only src/bmc is copied: the repository also tracks a stale src/bmc.egg-info.
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
-COPY --from=bmc --chown=$MAMBA_USER:$MAMBA_USER /pyproject.toml /README.md /tmp/bmc/
+COPY --from=bmc --chown=$MAMBA_USER:$MAMBA_USER /pyproject.toml /tmp/bmc/
 COPY --from=bmc --chown=$MAMBA_USER:$MAMBA_USER /src/bmc /tmp/bmc/src/bmc
 RUN pip install --no-deps /tmp/bmc && rm -rf /tmp/bmc
 
