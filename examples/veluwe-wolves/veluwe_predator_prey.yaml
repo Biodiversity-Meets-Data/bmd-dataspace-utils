@@ -1,0 +1,114 @@
+# Veluwe predator-prey occurrence cube (GBIF only)
+#
+# Wolf and its three main ungulate prey species on the Veluwe, 2015-2025,
+# as a yearly cube dimensioned (grid cell x year x species).
+#
+# The dataspace entrypoint decides where the cube is written, so base_dir here
+# is ignored by create_cube.py (it is only relevant when you run the engine
+# directly). Pass --output-dir on the command line instead.
+
+base_dir: "./test_outputs/"
+cube_name: "veluwe_predator_prey_2015_2025"
+
+export_as:
+  format: "zarr"
+
+# ======================================================================
+# 1. SPATIAL & TEMPORAL SELECTION
+# ======================================================================
+# Bounding box around the Veluwe. Deliberately a rectangle, not the exact
+# Natura 2000 polygon: the engine clips to a bbox, and the surrounding farmland
+# is useful contrast for the land-cover follow-up later.
+spatial:
+  target_grid: "EEA"
+  target_resolution: "1km"
+  use_bbox: true
+  bbox:
+    long_min: 5.60
+    long_max: 6.10
+    lat_min: 51.95
+    lat_max: 52.45
+
+# Full years 2015-2025. Months stay 1-12 so the GBIF query spans whole years;
+# the cube is aggregated to year only (see aggregate.group_by_columns below),
+# because at wolf densities a monthly axis is mostly noise.
+temporal:
+  start_year: 2015
+  start_month: 1
+  end_year: 2025
+  end_month: 12
+  time_aggregation: "yearly"   # cosmetic only; the real control is group_by_columns
+
+# ======================================================================
+# 2. DATA SOURCES
+# ======================================================================
+sources:
+  gbif:
+    # Leave empty to pull from the GBIF network. Set to a local export path to
+    # work offline from a downloaded occurrence file.
+    local_file_path:
+
+    query_filters:
+      taxon_keys: ["T56G", "QLXL", "53HGR", "QSF3"]
+
+      fetch_all_taxa: false
+      record_type: "presence"
+
+      # Coordinate-uncertainty handling. This is the knob that matters most for
+      # the wolf: sensitive-species records are often published with generalized
+      # (coarsened) coordinates. max_uncertainty drops anything coarser than this
+      # radius, so a tight cutoff can erase the wolf layer entirely.
+      # 5000 m keeps generalized records and lets the point-cloud spread them.
+      default_Uncertainty: 1000
+      max_uncertainty: 5000
+
+      exclude_issues:
+        - "ZERO_COORDINATE"
+        - "COORDINATE_OUT_OF_RANGE"
+        - "COUNTRY_COORDINATE_MISMATCH"
+
+    taxonomy:
+      # GBIF's backbone is now the Catalogue of Life Extended Release, so taxon_keys
+      # are the alphanumeric CoL keys (resolve them with utilities/check_keys.py) and
+      # col_backbone must be true. The legacy integer keys return zero occurrences.
+      col_backbone: true
+      lowest_level:
+
+    # Keep speciesKey (always fetched) plus year. No month: this is a yearly cube.
+    columns: ["year"]
+    time_cols: ["year"]
+
+    processing_mode: "vector"
+
+    vector_processing:
+      # point_cloud spreads each record's probability mass over nearby cells
+      # according to its coordinate uncertainty - the right treatment when some
+      # records (the wolf's) are coordinate-generalized. For a simpler, more
+      # literal first run, use topology "point" with mapping_mode "classification".
+      topology: "point_cloud"
+      mapping_mode: "fractional"
+      spatial_method: "intersect"
+      topology_config:
+        point_cloud:
+          n_passes: 100
+          distribution: "gaussian"
+          random_seed: 42
+
+    aggregate:
+      export_unaggregated: true
+
+      # This is what makes it a per-species cube. speciesKey as a grouping
+      # dimension keeps wolf, red deer, boar and roe deer as separate layers
+      # instead of collapsing them into one richness number per cell.
+      group_by_columns: ["year", "speciesKey"]
+
+      metrics:
+        # Expected occurrences: sum of the fractional mass each record contributes
+        # to a cell. In point_cloud mode the per-record weight column is "fraction"
+        # (the polygon mapper calls it "areal_fraction" - a different name; using the
+        # wrong one makes the engine silently skip the metric and the measure goes
+        # missing). The main quantity to compare predator against prey.
+        - column: "fraction"
+          method: "sum"
+          weighted: false
+          rename: "expected_occurrences"
