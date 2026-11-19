@@ -49,9 +49,11 @@ A few things to note about the last (`docker compose run`) command:
   necessary to give the Cubing Engine write access to CUBE_OUTPUT_DIR.
 - The recipe file (`my-recipe.yml`) may live anywhere on your filesystem, but be sure to specify its full path
   (starting with `/`), not a relative path.
-- Your recipe file must always be mapped into the container as `/recipe.yaml` (using the `-v` option, as shown above).
+- Your recipe file must always be mapped into the container as `/recipe.yaml` (using the `-v` option, as shown above);
+  the code inside the container expects the recipe file to be `/recipe.yaml`
 
-A concrete (but useless) example can be found in [smoke_test.sh](tests/smoke_test.sh).
+A convenience script, [create_cube.sh](/create_cube.sh), is provided to simplify running the Cubing Engine using Docker
+Compose. It takes one argument: the full path to the recipe file.
 
 ### Data Sources and Credentials
 
